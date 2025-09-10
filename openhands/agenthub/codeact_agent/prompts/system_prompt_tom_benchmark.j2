@@ -1,5 +1,7 @@
 {% include "system_prompt_tom.j2" %}
 
-<TOM_AGENT> in benchmark
-* You must communicate with ToM Agent whenever you receive a user message.
-</TOM_AGENT>
+<TOM_AGENT_BENCHMARK_OVERRIDE>
+* [MANDATORY] You MUST communicate with ToM Agent for EVERY user message as your FIRST action, before doing anything else.
+* Use the consult_tom_agent tool immediately upon receiving any user message.
+* The exception: "If the user message is 100 percent clear, you don't need to communicate with ToM agent." in the previous TOM_AGENT section does NOT apply in benchmark mode.
+</TOM_AGENT_BENCHMARK_OVERRIDE>
