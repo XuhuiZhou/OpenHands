@@ -27,6 +27,16 @@ nohup bash ./evaluation/benchmarks/swe_bench/scripts/run_infer_interact.sh \
   1 \
   stateful > swe_bench_interact_remote_tom_stateful_${MODEL//llm./}.log 2>&1 &
 
-echo "SWE-Interact stateful evaluation started with remote runtime and Tom agent using model: $MODEL"
+# Get the PID of the background process
+NOHUP_PID=$!
+
+echo "SWE-Interact stateful evaluation started with remote runtime and TomCodeActAgent using model: $MODEL"
 echo "Monitor progress with: tail -f swe_bench_interact_remote_tom_stateful_${MODEL//llm./}.log"
 echo "Check if running with: ps aux | grep run_infer_interact"
+
+# Wait for the nohup process to finish
+wait $NOHUP_PID
+
+# Run evaluation after the nohup process completes
+echo "Running evaluation..."
+./evaluation/benchmarks/swe_bench/scripts/eval_infer.sh ./evaluation/evaluation_outputs/outputs/cmu-lti__stateful-test/TomCodeActAgent/${MODEL//llm./}_maxiter_100_N_v0.54.0-no-hint-run_1/output.jsonl "" cmu-lti/stateful test

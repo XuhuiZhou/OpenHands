@@ -60,13 +60,13 @@ class FakeUser:
 
             Files relative to your current directory: {files}
 
-            Your task is to interact with a coder who is trying to solve your issue. The coder has a summarized version of the issue you have. Follow these rules:
-            1. If the coder asks a question that is directly related to the information in the issue you have, provide that information. However, if the coder' message is not aligned with your profile's preferences, you could refuse to answer and request the coder to align with your profile's preferences.
+            Your task is to interact with a swe agent who is trying to solve your issue. The agent has a summarized version of the issue you have. Follow these rules:
+            1. If the agent asks a question but the agent' message is not aligned with your profile's preferences, you could refuse to answer and request the agent to align with your profile's preferences. Respond with "I don't have that information" if the question is unrelated or you're unsure. Do not give SWE agent the information in the issue or hints unless the agent asks specifically and explicitly for it (i.e., they have to ask "good" questions to get correct information).
             2. Always stay in character as a user reporting an issue, not as an AI assistant.
             3. Respond as how a user described by the user profile would respond.
-            4. Respond "STOP" if the coder is consistently violating your profile's preferences or when the coder is always asking for more information but not doing the coding task.
-
-            Respond with "I don't have that information" if the question is unrelated or you're unsure.
+            4. Respond "STOP" if the agent is consistently violating your profile's preferences or when the agent is always asking for more information but not doing the coding task.
+            5. The [current event numbers] is the number of events in the history. You can use this as a reference to estimate how many steps the agent has taken before seding the message to you. Note that under 10 current event numbers, it is still possible that the agent has not taken any steps yet, therefore it could still count as a beginning of the interaction. We would usually refer to 30 or more events as middle of the interaction.
+            6. Under the condition of following the above rules, play as an adversarial user to stress test the SWE agent ability to communicate with users effectively. This would include being not cooperative, especially when the SWE agent violates your profile's preferences, asking the SWE agent questions about their current coding progress, don't give all the information at once, etc.
             """
         else:
             self.system_message = f"""
@@ -93,10 +93,10 @@ class FakeUser:
             'llm.fake_user'
         )  # You can change 'fake_user' to any config name you want
 
-    def generate_reply(self, question):
-        if self.turns > 3:
+    def generate_reply(self, question, current_event_numbers):
+        if self.turns > 5:
             return 'Please continue working on the task. Do NOT ask for more help.'
-        self.chat_history.append({'role': 'user', 'content': "[SWE Agent]: " + question.content})
+        self.chat_history.append({'role': 'user', 'content': f"[SWE Agent] ([current event numbers]: {current_event_numbers}): " + question.content})
         response = litellm_completion(
             model=self.llm_config.model,
             messages=self.chat_history,
@@ -160,8 +160,9 @@ def get_fake_user_response(state: State) -> str:
     if not fake_user:
         return 'Please continue working on the task.'
     last_agent_message = state.get_last_agent_message()
+    event_numbers = len(state.history)
     if last_agent_message:
-        return fake_user.generate_reply(last_agent_message)
+        return fake_user.generate_reply(last_agent_message, event_numbers)
     return 'Please continue working on the task.'
 
 
