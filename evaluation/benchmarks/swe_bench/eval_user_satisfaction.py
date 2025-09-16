@@ -8,6 +8,7 @@ where user profiles and preferences are considered.
 """
 
 import argparse
+import asyncio
 import json
 import os
 import sys
@@ -15,7 +16,7 @@ from typing import Dict, List, Tuple, Any, Optional
 from dataclasses import dataclass
 from pathlib import Path
 
-from litellm import completion as litellm_completion
+from litellm import acompletion as litellm_acompletion
 
 from openhands.core.config import get_llm_config_arg
 from openhands.events.serialization.event import event_from_dict
@@ -36,7 +37,7 @@ class UserSatisfactionMetrics:
 class FakeUserEvaluator:
     """Simulates a user evaluating the agent's performance"""
 
-    def __init__(self, llm_config_name: str = 'llm.eval_user'):
+    def __init__(self, llm_config_name: str = 'llm.fake_user'):
         self.llm_config = get_llm_config_arg(llm_config_name)
 
     def _format_trajectory_events(self, history: List[Dict[str, Any]]) -> str:
@@ -82,7 +83,7 @@ class FakeUserEvaluator:
                 print(f"Warning: Could not load report.json for {instance_id}: {e}")
         return None
 
-    def evaluate_trajectory(
+    async def evaluate_trajectory(
         self,
         instance: Dict[str, Any],
         history: List[Dict[str, Any]],
@@ -104,11 +105,12 @@ class FakeUserEvaluator:
         evaluation_prompt = self._build_evaluation_prompt(
             instance, history, test_result, user_profile, eval_results
         )
-
         # Get LLM evaluation
-        response = litellm_completion(
-            model="gpt-5-2025-08-07",
+        response = await litellm_acompletion(
+            model=self.llm_config.model,
             messages=[{'role': 'user', 'content': evaluation_prompt}],
+            api_key=self.llm_config.api_key.get_secret_value(),
+            temperature=1.0,
         )
 
         # Parse response into metrics
@@ -173,18 +175,18 @@ Evaluate the agent from a user's perspective on these dimensions (1-5 scale):
 
 Respond in this EXACT JSON format:
 {{
-    "overall_satisfaction": 4.2,
-    "communication_quality": 4.0,
-    "problem_solving_approach": 4.5,
-    "efficiency": 3.8,
-    "user_preference_alignment": 4.1,
-    "explanation": "Brief explanation of the overall rating",
     "detailed_feedback": {{
         "strengths": "What the agent did well",
         "weaknesses": "What could be improved",
         "user_experience": "How this felt from user perspective",
         "question_asking_behavior": "Assessment of when and how agent asked questions"
     }}
+    "overall_satisfaction": 4.2,
+    "communication_quality": 4.0,
+    "problem_solving_approach": 4.5,
+    "efficiency": 3.8,
+    "user_preference_alignment": 4.1,
+    "explanation": "Brief explanation of the overall rating",
 }}
 """
         return prompt
@@ -244,70 +246,99 @@ Respond in this EXACT JSON format:
             )
 
 
-def evaluate_output_file(
+async def evaluate_instance_batch(
+    evaluator: FakeUserEvaluator,
+    instances: List[Tuple[int, Dict[str, Any]]],
+    base_dir: str
+) -> List[Dict[str, Any]]:
+    """Evaluate a batch of instances concurrently"""
+    async def evaluate_single(line_num: int, instance_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        try:
+            instance_id = instance_data.get('instance_id')
+            if not instance_id:
+                print(f"Warning: No instance_id found in line {line_num + 1}")
+                return None
+
+            # Load evaluation results from report.json
+            eval_results = evaluator._load_evaluation_results(instance_id, str(base_dir))
+
+            # Extract components
+            history = instance_data.get('history', [])
+            instance_dict = instance_data.get('instance', {})
+            user_profile = instance_dict.get('user_roleplay_prompt')
+
+            # Evaluate this instance
+            metrics = await evaluator.evaluate_trajectory(
+                instance=instance_dict,
+                history=history,
+                test_result=instance_data.get('test_result', {}),
+                user_profile=user_profile,
+                eval_results=eval_results
+            )
+
+            result = {
+                'instance_id': instance_id,
+                'metrics': {
+                    'overall_satisfaction': metrics.overall_satisfaction,
+                    'communication_quality': metrics.communication_quality,
+                    'problem_solving_approach': metrics.problem_solving_approach,
+                    'efficiency': metrics.efficiency,
+                    'user_preference_alignment': metrics.user_preference_alignment,
+                },
+                'explanation': metrics.explanation,
+                'detailed_feedback': metrics.detailed_feedback,
+                'has_user_profile': user_profile is not None,
+                'trajectory_length': len(history),
+                'has_eval_results': eval_results is not None
+            }
+
+            print(f"Evaluated {instance_id}: Overall satisfaction = {metrics.overall_satisfaction:.2f}")
+            return result
+
+        except Exception as e:
+            print(f"Error processing line {line_num + 1}: {e}")
+            return None
+
+    # Process all instances in the batch concurrently
+    tasks = [evaluate_single(line_num, instance_data) for line_num, instance_data in instances]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Filter out None results and exceptions
+    return [r for r in results if r is not None and not isinstance(r, Exception)]
+
+async def evaluate_output_file(
     output_file: str,
     evaluator: FakeUserEvaluator,
-    max_instances: int = None
+    max_instances: int = None,
+    batch_size: int = 64
 ) -> Dict[str, Any]:
-    """Evaluate all instances in an output file"""
-    results = []
+    """Evaluate all instances in an output file with async batching"""
+    all_results = []
     output_path = Path(output_file)
     base_dir = output_path.parent  # Directory containing output.jsonl
 
+    # Read all instances
+    instances = []
     with open(output_file, 'r') as f:
         for line_num, line in enumerate(f):
             if max_instances and line_num >= max_instances:
                 break
-
             try:
                 instance_data = json.loads(line)
-                instance_id = instance_data.get('instance_id')
-
-                if not instance_id:
-                    print(f"Warning: No instance_id found in line {line_num + 1}")
-                    continue
-
-                # Load evaluation results from report.json
-                eval_results = evaluator._load_evaluation_results(instance_id, str(base_dir))
-
-                # Extract components
-                history = instance_data.get('history', [])
-                instance_dict = instance_data.get('instance', {})
-                user_profile = instance_dict.get('user_roleplay_prompt')
-
-                # Evaluate this instance
-                metrics = evaluator.evaluate_trajectory(
-                    instance=instance_dict,
-                    history=history,
-                    test_result=instance_data.get('test_result', {}),
-                    user_profile=user_profile,
-                    eval_results=eval_results
-                )
-
-                result = {
-                    'instance_id': instance_id,
-                    'metrics': {
-                        'overall_satisfaction': metrics.overall_satisfaction,
-                        'communication_quality': metrics.communication_quality,
-                        'problem_solving_approach': metrics.problem_solving_approach,
-                        'efficiency': metrics.efficiency,
-                        'user_preference_alignment': metrics.user_preference_alignment,
-                    },
-                    'explanation': metrics.explanation,
-                    'detailed_feedback': metrics.detailed_feedback,
-                    'has_user_profile': user_profile is not None,
-                    'trajectory_length': len(history),
-                    'has_eval_results': eval_results is not None
-                }
-
-                results.append(result)
-                print(f"Evaluated {instance_id}: Overall satisfaction = {metrics.overall_satisfaction:.2f}")
-
+                instances.append((line_num, instance_data))
             except Exception as e:
-                print(f"Error processing line {line_num + 1}: {e}")
+                print(f"Error parsing line {line_num + 1}: {e}")
                 continue
 
-    return aggregate_results(results)
+    # Process instances in batches
+    for i in range(0, len(instances), batch_size):
+        batch = instances[i:i + batch_size]
+        print(f"Processing batch {i//batch_size + 1}/{(len(instances) + batch_size - 1)//batch_size} ({len(batch)} instances)")
+
+        batch_results = await evaluate_instance_batch(evaluator, batch, str(base_dir))
+        all_results.extend(batch_results)
+
+    return aggregate_results(all_results)
 
 
 def aggregate_results(results: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -347,24 +378,50 @@ def aggregate_results(results: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def main():
     parser = argparse.ArgumentParser(description='Evaluate user satisfaction from SWE-Bench trajectories')
-    parser.add_argument('--input-dir', type=str, required=True,
-                        help='Directory containing output.jsonl files to evaluate')
-    parser.add_argument('--llm-config', type=str, default='llm.eval_user',
+    parser.add_argument('--input-dir', type=str,
+                        help='Full path to directory containing output.jsonl files')
+    parser.add_argument('--agent', type=str,
+                        help='Agent name (e.g., TomCodeActAgent)')
+    parser.add_argument('--model', type=str,
+                        help='Model name (e.g., claude-sonnet-4-20250514)')
+    parser.add_argument('--rag', action='store_true', default=False,
+                        help='Whether to use RAG for evaluation')
+    parser.add_argument('--dataset', type=str, default='cmu-lti__stateful-test',
+                        help='Dataset name (default: cmu-lti__stateful-test)')
+    parser.add_argument('--llm-config', type=str, default='llm.fake_user',
                         help='LLM config name for evaluation')
     parser.add_argument('--max-instances', type=int, default=None,
                         help='Maximum number of instances to evaluate per file')
+    parser.add_argument('--batch-size', type=int, default=64,
+                        help='Batch size for concurrent evaluation (default: 64)')
     parser.add_argument('--recursive', action='store_true',
                         help='Search for output.jsonl files recursively')
-    parser.add_argument('--include-eval-results', action='store_true',
-                        help='Include technical evaluation results from report.json files')
+    parser.add_argument('--include-eval-results', action='store_true', default=True,
+                        help='Include technical evaluation results from report.json files (default: True)')
 
     args = parser.parse_args()
+
+    # Determine input directory
+    if args.input_dir:
+        input_path = Path(args.input_dir)
+    elif args.agent and args.model:
+        # Construct path automatically
+        base_dir = Path("/home/xuhuizhou/OpenHands/evaluation/evaluation_outputs/outputs")
+        # Find the directory that matches the pattern
+        pattern = f"{args.dataset}/{args.agent}/{args.model}*"
+        matches = list(base_dir.glob(pattern))
+        if not matches:
+            print(f"No directories found matching pattern: {pattern}")
+            sys.exit(1)
+        input_path = matches[0]  # Use the first match
+        print(f"Using directory: {input_path}")
+    else:
+        parser.error("Either --input-dir or both --agent and --model must be provided")
 
     # Initialize evaluator
     evaluator = FakeUserEvaluator(args.llm_config)
 
     # Find all output files
-    input_path = Path(args.input_dir)
     if args.recursive:
         output_files = list(input_path.rglob('output.jsonl'))
     else:
@@ -391,10 +448,14 @@ def main():
     # Evaluate each file
     all_results = {}
 
-    for output_file in output_files:
-        print(f"\nEvaluating {output_file}...")
-        file_results = evaluate_output_file(str(output_file), evaluator, args.max_instances)
-        all_results[str(output_file)] = file_results
+    async def evaluate_all_files():
+        for output_file in output_files:
+            print(f"\nEvaluating {output_file}...")
+            file_results = await evaluate_output_file(str(output_file), evaluator, args.max_instances, args.batch_size)
+            all_results[str(output_file)] = file_results
+
+    # Run async evaluation
+    asyncio.run(evaluate_all_files())
 
     # Save results to input directory
     output_file = input_path / 'user_satisfaction.json'

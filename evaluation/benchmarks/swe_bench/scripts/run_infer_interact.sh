@@ -13,6 +13,7 @@ DATASET=$7
 SPLIT=$8
 N_RUNS=$9
 MODE=${10}
+EXP_NAME=${11}
 
 
 if [ -z "$NUM_WORKERS" ]; then

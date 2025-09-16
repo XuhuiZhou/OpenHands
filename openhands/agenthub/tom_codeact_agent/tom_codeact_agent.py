@@ -49,6 +49,7 @@ from openhands.utils.prompt import PromptManager
 
 CLI_AVAILABLE = os.environ.get('CLI_AVAILABLE', 'True').lower() == 'true'
 TOM_AGENT_MODEL = os.environ.get('TOM_AGENT_MODEL', '')
+PURE_RAG_MODE = os.environ.get('PURE_RAG_MODE', 'false').lower() == 'true'
 
 
 class TomCodeActAgent(CodeActAgent):
@@ -314,12 +315,14 @@ class TomCodeActAgent(CodeActAgent):
                         user_id=user_id,
                         query=query_text,
                         formatted_messages=formatted_messages,
+                        pure_rag=PURE_RAG_MODE,
                     )
             else:
                 tom_suggestion = self.tom_agent.give_suggestions(
                     user_id=user_id,
                     query=query_text,
                     formatted_messages=formatted_messages,
+                    pure_rag=PURE_RAG_MODE,
                 )
             if tom_suggestion:
                 logger.debug('✅ Tom: Received consultation result')

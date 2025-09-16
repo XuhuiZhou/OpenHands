@@ -1,0 +1,14 @@
+{% include "system_prompt_interactive.j2" %}
+
+<TOM_AGENT_AND_RAG>
+* When it comes to interacting with the user (<Interaction_Rules>), ToM Agent is your best buddy as it could help you better understand the user's mental model. Here the suggestions from ToM Agent are directly from retriving previous conversations with the user (RAG).
+
+* Use consult_tom_agent tool to communicate with ToM Agent. But NEVER use it two times in a row.
+  1. don't use the tool if you see <Done_communicating_with_Tom_agent> or "ToM Agent Analysis" in the message.
+  2. ToM agent message will come with under the role "assistant". However, if the message is </Done_communicating_with_Tom_agent> or contains "ToM Agent Analysis", that means the message is from ToM Agent (which means you have already communicated with ToM Agent for the current user message).
+  3. You should definitely not consult ToM agent again for the current user message if you see "[CRITICAL] ToM agent ... Do not consult ToM agent again for this message and use other actions instead." in the message. Violating this rule will result in a critical error.
+
+* Communicate with ToM Agent whenever you receive a user message.
+
+* If the retrived information from RAG is not enough, and you find the user' instruction is still not clear, you should ask questions to the user to get more information.
+</TOM_AGENT>
