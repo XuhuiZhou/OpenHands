@@ -21,10 +21,20 @@ nohup bash ./evaluation/benchmarks/swe_bench/scripts/run_infer_interact.sh \
   TomCodeActAgent \
   500 \
   100 \
-  16 \
+  50 \
   cmu-lti/interactive-swe \
   test > swe_bench_interact_remote_32_${MODEL//llm./}_tom.log 2>&1 &
+
+# Get the PID of the background process
+NOHUP_PID=$!
 
 echo "SWE-Interact evaluation started with remote runtime and 32 workers using model: $MODEL"
 echo "Monitor progress with: tail -f swe_bench_interact_remote_32_${MODEL//llm./}_tom.log"
 echo "Check if running with: ps aux | grep run_infer_interact"
+
+# Wait for the nohup process to finish
+# wait $NOHUP_PID
+
+# # Run evaluation after the nohup process completes
+# echo "Running evaluation..."
+# ./evaluation/benchmarks/swe_bench/scripts/eval_infer.sh ./evaluation/evaluation_outputs/outputs/cmu-lti__interactive-swe-test/TomCodeActAgent/${MODEL//llm./}_maxiter_100_N_v0.54.0-no-hint-run_1/output.jsonl "" cmu-lti/interactive-swe test

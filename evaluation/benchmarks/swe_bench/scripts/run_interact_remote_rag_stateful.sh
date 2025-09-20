@@ -20,9 +20,9 @@ nohup bash ./evaluation/benchmarks/swe_bench/scripts/run_infer_interact.sh \
   $MODEL \
   HEAD \
   TomCodeActAgent \
-  64 \
+  500 \
   100 \
-  64 \
+  50 \
   cmu-lti/stateful \
   test \
   1 \

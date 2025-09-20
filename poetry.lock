@@ -10780,7 +10780,7 @@ dev = ["black (>=22.0.0)", "isort (>=5.0.0)", "mypy (>=1.0.0)", "pre-commit (>=3
 type = "git"
 url = "https://github.com/all-hands-ai/ToM-SWE.git"
 reference = "feat/improve_prompts_benchmark"
-resolved_reference = "997330c4476a6b77b942a775f699e0b68b55103c"
+resolved_reference = "733a90049086de8f055b39cb0a9f8d8135b4f50c"
 
 [[package]]
 name = "toml"

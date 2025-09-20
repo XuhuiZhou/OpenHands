@@ -45,6 +45,7 @@ from openhands.utils.async_utils import call_async_from_sync
 USE_HINT_TEXT = os.environ.get('USE_HINT_TEXT', 'false').lower() == 'true'
 USE_INSTANCE_IMAGE = os.environ.get('USE_INSTANCE_IMAGE', 'false').lower() == 'true'
 RUN_WITH_BROWSING = os.environ.get('RUN_WITH_BROWSING', 'false').lower() == 'false'
+PURE_RAG_MODE = os.environ.get('PURE_RAG_MODE', 'false').lower() == 'true'
 
 
 class FakeUser:
@@ -174,6 +175,11 @@ AGENT_CLS_TO_FAKE_USER_RESPONSE_FN = {
 
 def get_instruction(instance: pd.Series, metadata: EvalMetadata) -> MessageAction:
     instance_copy = instance.copy()
+    # For some models, where overfitting on some tools is a problem, we add hints to the instruction
+    if metadata.agent_class == 'TomCodeActAgent' and metadata.llm_config.model in ['litellm_proxy/qwen3-coder-480b']:
+        instance_copy.problem_statement = f"{instance.problem_statement}\n\nHints:\nUse `consult_tom_agent` tool to consult ToM agent for this user message. Once you have advice from ToM agent (start with '*****************ToM Agent Analysis Start Here*****************' and end with '*****************ToM Agent Analysis End Here*****************'), you should act on it immediately."
+        if PURE_RAG_MODE:
+            instance_copy.problem_statement = f"{instance.problem_statement}\n\nHints:\nUse `consult_tom_agent` tool to consult ToM agent for this user message. The ToM agent analysis (start with '*****************ToM Agent Analysis Start Here*****************' and end with '*****************ToM Agent Analysis End Here*****************') will provide you the relevant previous chunks of interaction history with the user. If you find the provided history is not enough, you should use the non tool calls to ask the user for more information."
     if USE_HINT_TEXT:
         instance_copy.problem_statement = f'{instance.problem_statement}\n\nHints:\nThe user has not provided all the necessary details about the issue, and there are some hidden details that are helpful. Please ask the user specific questions using non-code commands to gather the relevant information that the user has to help you solve the issue. Ensure you have all the details you require to solve the issue.'
     return base_get_instruction(instance_copy, metadata)

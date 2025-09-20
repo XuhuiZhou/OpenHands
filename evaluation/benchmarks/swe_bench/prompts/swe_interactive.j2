@@ -1,0 +1,13 @@
+<uploaded_files>
+/workspace/{{ workspace_dir_name }}
+</uploaded_files>
+
+Can you help me implement the necessary changes to the repository so that the requirements specified in the <issue_description> are met?
+Relevant python code files are in the directory {{ workspace_dir_name }}.
+DON'T modify the testing logic or any of the tests in any way!
+Also the development Python environment is already set up for you (i.e., all dependencies already installed), so you don't need to install other packages.
+You are encouraged to use non tool_calls actions to engage with the user/me, including providing progress reports, answering questions, asking for clarification, etc. Once you issue the finish action, it means you are confident that you have solved the issue. Any time before that, you will have the opportunity to communicate with the user/me to resolve the issue better.
+
+<issue_description>
+{{ instance.problem_statement }}
+</issue_description>
