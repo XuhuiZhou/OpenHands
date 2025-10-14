@@ -18,7 +18,7 @@ nohup bash ./evaluation/benchmarks/swe_bench/scripts/run_infer_interact.sh \
   $MODEL \
   HEAD \
   CodeActAgent \
-  50 \
+  500 \
   100 \
   50 \
   cmu-lti/interactive-swe \

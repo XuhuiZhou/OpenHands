@@ -21,7 +21,7 @@ nohup bash ./evaluation/benchmarks/swe_bench/scripts/run_infer_interact.sh \
   TomCodeActAgent \
   500 \
   100 \
-  32 \
+  64 \
   cmu-lti/stateful \
   test \
   1 \

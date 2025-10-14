@@ -16,6 +16,8 @@ from typing import Dict, List, Tuple, Any, Optional
 from dataclasses import dataclass
 from pathlib import Path
 
+import scipy.stats
+import numpy as np
 from litellm import acompletion as litellm_acompletion
 
 from openhands.core.config import get_llm_config_arg
@@ -262,6 +264,11 @@ async def evaluate_instance_batch(
             # Load evaluation results from report.json
             eval_results = evaluator._load_evaluation_results(instance_id, str(base_dir))
 
+            # Extract task success if available
+            task_resolved = None
+            if eval_results and instance_id in eval_results:
+                task_resolved = eval_results[instance_id].get('resolved', False)
+
             # Extract components
             history = instance_data.get('history', [])
             instance_dict = instance_data.get('instance', {})
@@ -289,7 +296,8 @@ async def evaluate_instance_batch(
                 'detailed_feedback': metrics.detailed_feedback,
                 'has_user_profile': user_profile is not None,
                 'trajectory_length': len(history),
-                'has_eval_results': eval_results is not None
+                'has_eval_results': eval_results is not None,
+                'task_resolved': task_resolved
             }
 
             print(f"Evaluated {instance_id}: Overall satisfaction = {metrics.overall_satisfaction:.2f}")
@@ -341,6 +349,198 @@ async def evaluate_output_file(
     return aggregate_results(all_results)
 
 
+def calculate_confidence_intervals(results: List[Dict[str, Any]], confidence_level: float = 0.95) -> Dict[str, Any]:
+    """Calculate confidence intervals for satisfaction metrics"""
+    metrics = ['overall_satisfaction', 'communication_quality', 'problem_solving_approach', 'efficiency', 'user_preference_alignment']
+    confidence_intervals = {}
+
+    alpha = 1 - confidence_level
+
+    for metric in metrics:
+        values = [r['metrics'][metric] for r in results if r['metrics'][metric] > 0]
+
+        if len(values) < 2:
+            confidence_intervals[metric] = {
+                'mean': 0,
+                'ci_lower': 0,
+                'ci_upper': 0,
+                'margin_of_error': 0,
+                'n_samples': len(values),
+                'error': 'Insufficient data'
+            }
+            continue
+
+        # Calculate basic statistics
+        mean = np.mean(values)
+        std = np.std(values, ddof=1)  # Sample standard deviation
+        n = len(values)
+
+        # Calculate standard error
+        se = std / np.sqrt(n)
+
+        # Calculate t-critical value for given confidence level
+        t_critical = scipy.stats.t.ppf(1 - alpha/2, df=n-1)
+
+        # Calculate margin of error
+        margin_of_error = t_critical * se
+
+        # Calculate confidence interval
+        ci_lower = mean - margin_of_error
+        ci_upper = mean + margin_of_error
+
+        confidence_intervals[metric] = {
+            'mean': mean,
+            'std': std,
+            'se': se,
+            'ci_lower': ci_lower,
+            'ci_upper': ci_upper,
+            'margin_of_error': margin_of_error,
+            'n_samples': n,
+            'confidence_level': confidence_level
+        }
+
+    return confidence_intervals
+
+
+def calculate_contingency_analysis(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Calculate contingency table between task success and satisfaction levels"""
+    # Extract paired data
+    task_success = []
+    satisfaction_scores = []
+
+    for result in results:
+        if not result.get('has_eval_results', False) or 'task_resolved' not in result:
+            continue
+
+        satisfaction = result['metrics']['overall_satisfaction']
+        if satisfaction <= 0:
+            continue
+
+        task_success.append(int(result['task_resolved']))
+        satisfaction_scores.append(satisfaction)
+
+    if len(task_success) < 2:
+        return {'error': 'Insufficient data for contingency analysis'}
+
+    # Categorize satisfaction scores
+    satisfaction_categories = []
+    for score in satisfaction_scores:
+        if score <= 2.0:
+            satisfaction_categories.append('Low (≤2.0)')
+        elif score <= 3.5:
+            satisfaction_categories.append('Medium (2.0-3.5)')
+        else:
+            satisfaction_categories.append('High (>3.5)')
+
+    # Build contingency table
+    contingency = {
+        'Failed Tasks (0)': {'Low (≤2.0)': 0, 'Medium (2.0-3.5)': 0, 'High (>3.5)': 0},
+        'Successful Tasks (1)': {'Low (≤2.0)': 0, 'Medium (2.0-3.5)': 0, 'High (>3.5)': 0}
+    }
+
+    for success, sat_cat in zip(task_success, satisfaction_categories):
+        success_label = 'Successful Tasks (1)' if success else 'Failed Tasks (0)'
+        contingency[success_label][sat_cat] += 1
+
+    # Calculate percentages and totals
+    total_failed = sum(contingency['Failed Tasks (0)'].values())
+    total_successful = sum(contingency['Successful Tasks (1)'].values())
+    total_samples = total_failed + total_successful
+
+    # Add percentage calculations
+    result = {
+        'contingency_table': contingency,
+        'totals': {
+            'failed_tasks': total_failed,
+            'successful_tasks': total_successful,
+            'total_samples': total_samples
+        },
+        'percentages': {}
+    }
+
+    # Calculate row percentages (within each success category)
+    for success_type in contingency:
+        total = total_failed if 'Failed' in success_type else total_successful
+        result['percentages'][success_type] = {}
+        for sat_cat in contingency[success_type]:
+            count = contingency[success_type][sat_cat]
+            percentage = (count / total * 100) if total > 0 else 0
+            result['percentages'][success_type][sat_cat] = percentage
+
+    # Calculate disagreement cases
+    # High satisfaction but failed task
+    high_sat_failed = contingency['Failed Tasks (0)']['High (>3.5)']
+    # Low satisfaction but successful task
+    low_sat_success = contingency['Successful Tasks (1)']['Low (≤2.0)']
+
+    result['disagreement_analysis'] = {
+        'high_satisfaction_but_failed': {
+            'count': high_sat_failed,
+            'percentage': (high_sat_failed / total_samples * 100) if total_samples > 0 else 0
+        },
+        'low_satisfaction_but_successful': {
+            'count': low_sat_success,
+            'percentage': (low_sat_success / total_samples * 100) if total_samples > 0 else 0
+        },
+        'total_disagreement': {
+            'count': high_sat_failed + low_sat_success,
+            'percentage': ((high_sat_failed + low_sat_success) / total_samples * 100) if total_samples > 0 else 0
+        }
+    }
+
+    return result
+
+
+def calculate_task_success_correlation(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Calculate point-biserial correlation between task success and user satisfaction"""
+    # Extract paired data where both task success and satisfaction are available
+    task_success = []
+    satisfaction_scores = []
+
+    for result in results:
+        if not result.get('has_eval_results', False):
+            continue
+
+        instance_id = result['instance_id']
+        satisfaction = result['metrics']['overall_satisfaction']
+
+        # Skip if satisfaction score is 0 (indicates parsing failure or no score)
+        if satisfaction <= 0:
+            continue
+
+        # For this implementation, we need to load the actual eval results
+        # Since we don't have direct access here, we'll look for it in the result
+        # The eval results should be added to the result dict during evaluation
+        if 'task_resolved' in result:
+            task_success.append(int(result['task_resolved']))
+            satisfaction_scores.append(satisfaction)
+
+    if len(task_success) < 2:
+        return {
+            'correlation': None,
+            'p_value': None,
+            'n_samples': len(task_success),
+            'error': 'Insufficient data for correlation analysis'
+        }
+
+    try:
+        correlation, p_value = scipy.stats.pointbiserialr(task_success, satisfaction_scores)
+        return {
+            'correlation': correlation,
+            'p_value': p_value,
+            'n_samples': len(task_success),
+            'task_success_rate': sum(task_success) / len(task_success),
+            'mean_satisfaction': sum(satisfaction_scores) / len(satisfaction_scores)
+        }
+    except Exception as e:
+        return {
+            'correlation': None,
+            'p_value': None,
+            'n_samples': len(task_success),
+            'error': f'Error calculating correlation: {str(e)}'
+        }
+
+
 def aggregate_results(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Aggregate evaluation results with improved categorization"""
     if not results:
@@ -361,6 +561,11 @@ def aggregate_results(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     non_stateful_results = [r for r in results if not r['has_user_profile']]
     with_eval_results = [r for r in results if r.get('has_eval_results', False)]
 
+    # Calculate task success correlation, contingency analysis, and confidence intervals
+    correlation_analysis = calculate_task_success_correlation(results)
+    contingency_analysis = calculate_contingency_analysis(results)
+    confidence_intervals = calculate_confidence_intervals(results)
+
     return {
         'summary': {
             'total_instances': len(results),
@@ -372,6 +577,9 @@ def aggregate_results(results: List[Dict[str, Any]]) -> Dict[str, Any]:
         'overall_averages': calculate_averages(results),
         'stateful_averages': calculate_averages(stateful_results),
         'non_stateful_averages': calculate_averages(non_stateful_results),
+        'correlation_analysis': correlation_analysis,
+        'contingency_analysis': contingency_analysis,
+        'confidence_intervals': confidence_intervals,
         'detailed_results': results
     }
 
@@ -493,6 +701,88 @@ def main():
             print(f"  Problem Solving Approach: {averages['problem_solving_approach']:.2f}/5")
             print(f"  Efficiency: {averages['efficiency']:.2f}/5")
             print(f"  User Preference Alignment: {averages['user_preference_alignment']:.2f}/5")
+
+            # Display confidence intervals
+            confidence_intervals = overall_aggregated.get('confidence_intervals', {})
+            if confidence_intervals:
+                print(f"\n95% Confidence Intervals:")
+                for metric_name, metric_data in confidence_intervals.items():
+                    if 'error' not in metric_data:
+                        ci_lower = metric_data['ci_lower']
+                        ci_upper = metric_data['ci_upper']
+                        margin_error = metric_data['margin_of_error']
+                        n_samples = metric_data['n_samples']
+
+                        # Format metric name for display
+                        display_name = metric_name.replace('_', ' ').title()
+                        print(f"  {display_name}: [{ci_lower:.2f}, {ci_upper:.2f}] (±{margin_error:.2f}, n={n_samples})")
+                    else:
+                        display_name = metric_name.replace('_', ' ').title()
+                        print(f"  {display_name}: {metric_data['error']}")
+
+            # Display correlation analysis
+            correlation_analysis = overall_aggregated.get('correlation_analysis', {})
+            if correlation_analysis and correlation_analysis.get('correlation') is not None:
+                print(f"\nTask Success vs User Satisfaction Correlation:")
+                print(f"  Point-biserial correlation: {correlation_analysis['correlation']:.3f}")
+                print(f"  P-value: {correlation_analysis['p_value']:.4f}")
+                print(f"  Sample size: {correlation_analysis['n_samples']} instances")
+                print(f"  Task success rate: {correlation_analysis['task_success_rate']:.1%}")
+                print(f"  Mean satisfaction: {correlation_analysis['mean_satisfaction']:.2f}/5")
+
+                # Interpret correlation strength
+                corr = abs(correlation_analysis['correlation'])
+                if corr < 0.1:
+                    strength = "negligible"
+                elif corr < 0.3:
+                    strength = "weak"
+                elif corr < 0.5:
+                    strength = "moderate"
+                elif corr < 0.7:
+                    strength = "strong"
+                else:
+                    strength = "very strong"
+
+                significance = "significant" if correlation_analysis['p_value'] < 0.05 else "not significant"
+                print(f"  Interpretation: {strength} correlation ({significance})")
+            elif correlation_analysis.get('error'):
+                print(f"\nTask Success vs User Satisfaction Correlation:")
+                print(f"  Error: {correlation_analysis['error']}")
+
+            # Display contingency analysis
+            contingency_analysis = overall_aggregated.get('contingency_analysis', {})
+            if contingency_analysis and 'contingency_table' in contingency_analysis:
+                print(f"\nContingency Analysis - Task Success vs Satisfaction Levels:")
+
+                # Display contingency table
+                table = contingency_analysis['contingency_table']
+                totals = contingency_analysis['totals']
+                percentages = contingency_analysis['percentages']
+
+                print(f"  {'':20} | {'Low (≤2.0)':>12} | {'Medium (2.0-3.5)':>16} | {'High (>3.5)':>12} | {'Total':>8}")
+                print(f"  {'-'*20}|{'-'*14}|{'-'*18}|{'-'*14}|{'-'*10}")
+
+                for task_type in ['Failed Tasks (0)', 'Successful Tasks (1)']:
+                    counts = table[task_type]
+                    percs = percentages[task_type]
+                    total = totals['failed_tasks'] if 'Failed' in task_type else totals['successful_tasks']
+
+                    print(f"  {task_type:20}| {counts['Low (≤2.0)']:>4} ({percs['Low (≤2.0)']:>4.1f}%) "
+                          f"| {counts['Medium (2.0-3.5)']:>4} ({percs['Medium (2.0-3.5)']:>4.1f}%) "
+                          f"| {counts['High (>3.5)']:>4} ({percs['High (>3.5)']:>4.1f}%) | {total:>8}")
+
+                # Display disagreement analysis
+                disagreement = contingency_analysis['disagreement_analysis']
+                print(f"\nDisagreement Cases (showing task success ≠ satisfaction level):")
+                print(f"  High satisfaction but task failed: {disagreement['high_satisfaction_but_failed']['count']} "
+                      f"({disagreement['high_satisfaction_but_failed']['percentage']:.1f}%)")
+                print(f"  Low satisfaction but task succeeded: {disagreement['low_satisfaction_but_successful']['count']} "
+                      f"({disagreement['low_satisfaction_but_successful']['percentage']:.1f}%)")
+                print(f"  Total disagreement cases: {disagreement['total_disagreement']['count']} "
+                      f"({disagreement['total_disagreement']['percentage']:.1f}%)")
+            elif contingency_analysis.get('error'):
+                print(f"\nContingency Analysis:")
+                print(f"  Error: {contingency_analysis['error']}")
 
             if summary['stateful_instances'] > 0:
                 print(f"\nStateful Mode Analysis ({summary['stateful_instances']} instances):")

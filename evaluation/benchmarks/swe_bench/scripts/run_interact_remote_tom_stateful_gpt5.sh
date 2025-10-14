@@ -9,9 +9,8 @@ MODEL=${1:-"llm.claude-sonnet-4-20250514"}
 
 CLI_AVAILABLE="false" \
 USE_HINT_TEXT="false" \
-TOM_AGENT_MODEL="litellm_proxy/claude-sonnet-4-20250514" \
-SYSTEM_PROMPT_FILENAME="system_prompt_rag.j2" \
-PURE_RAG_MODE="true" \
+TOM_AGENT_MODEL="gpt-5-2025-08-07" \
+SYSTEM_PROMPT_FILENAME="system_prompt_tom_benchmark.j2" \
 ALLHANDS_API_KEY="ah-69ce5388-6069-4c76-9d8d-eae75dd553dc" \
 RUNTIME=remote \
 SANDBOX_REMOTE_RUNTIME_API_URL="https://runtime.eval.all-hands.dev" \
@@ -20,20 +19,20 @@ nohup bash ./evaluation/benchmarks/swe_bench/scripts/run_infer_interact.sh \
   $MODEL \
   HEAD \
   TomCodeActAgent \
-  500 \
   100 \
-  64 \
+  100 \
+  100 \
   cmu-lti/stateful \
   test \
   1 \
   stateful \
-  rag > swe_bench_interact_remote_rag_stateful_${MODEL//llm./}.log 2>&1 &
+  gpt5 > swe_bench_interact_remote_tom_stateful_${MODEL//llm./}.log 2>&1 &
 
 # Get the PID of the background process
 NOHUP_PID=$!
 
 echo "SWE-Interact stateful evaluation started with remote runtime and TomCodeActAgent using model: $MODEL"
-echo "Monitor progress with: tail -f swe_bench_interact_remote_rag_stateful_${MODEL//llm./}.log"
+echo "Monitor progress with: tail -f swe_bench_interact_remote_tom_stateful_${MODEL//llm./}.log"
 echo "Check if running with: ps aux | grep run_infer_interact"
 
 # Wait for the nohup process to finish
@@ -41,4 +40,4 @@ wait $NOHUP_PID
 
 # Run evaluation after the nohup process completes
 echo "Running evaluation..."
-./evaluation/benchmarks/swe_bench/scripts/eval_infer.sh ./evaluation/evaluation_outputs/outputs/cmu-lti__stateful-test/TomCodeActAgent/${MODEL//llm./}_maxiter_100_N_v0.54.0-no-hint-rag-run_1/output.jsonl "" cmu-lti/stateful test
+./evaluation/benchmarks/swe_bench/scripts/eval_infer.sh ./evaluation/evaluation_outputs/outputs/cmu-lti__stateful-test/TomCodeActAgent/${MODEL//llm./}_maxiter_100_N_v0.54.0-no-hint-gpt5-run_1/output.jsonl "" cmu-lti/stateful test
